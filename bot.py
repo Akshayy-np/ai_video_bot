@@ -1,49 +1,31 @@
 import os
 import threading
 import yt_dlp
-
 from flask import Flask
 from telegram import Update
-from telegram.ext import Updater, MessageHandler, Filters, CallbackContext
+from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
 
-# ==============================
-# TELEGRAM BOT TOKEN
-# ==============================
 TOKEN = "8599234323:AAGkiqwUbbabe-H2UD13BXOUranrq77GoY0"
 
+# -------- Flask keep alive --------
+web = Flask(__name__)
 
-# ==============================
-# FLASK KEEP-ALIVE SERVER
-# (Needed for Render FREE)
-# ==============================
-app_web = Flask(__name__)
-
-@app_web.route("/")
+@web.route("/")
 def home():
-    return "Bot is running!"
+    return "Bot running"
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
-    app_web.run(host="0.0.0.0", port=port)
+    web.run(host="0.0.0.0", port=port)
 
-
-# ==============================
-# DOWNLOAD FUNCTION
-# ==============================
-def download(update: Update, context: CallbackContext):
-
+# -------- Download handler --------
+async def download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text
-    update.message.reply_text("Downloading... please wait")
+    await update.message.reply_text("Downloading...")
 
-    filename = "video.%(ext)s"
-
-    # yt-dlp options
     ydl_opts = {
-        "outtmpl": filename,
         "format": "best",
-        "noplaylist": True,
-
-        # Android client (fix YouTube bot verification)
+        "outtmpl": "video.%(ext)s",
         "extractor_args": {
             "youtube": {
                 "player_client": ["android"]
@@ -54,38 +36,21 @@ def download(update: Update, context: CallbackContext):
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            file_name = ydl.prepare_filename(info)
+            filename = ydl.prepare_filename(info)
 
-        # Send video
-        with open(file_name, "rb") as f:
-            update.message.reply_video(f)
-
-        os.remove(file_name)
+        await update.message.reply_video(open(filename, "rb"))
+        os.remove(filename)
 
     except Exception as e:
         print(e)
-        update.message.reply_text("❌ Download failed.")
+        await update.message.reply_text("Download failed.")
 
-
-# ==============================
-# MAIN BOT START
-# ==============================
+# -------- Main --------
 def main():
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download))
+    app.run_polling()
 
-    print("Bot starting...")
-
-    updater = Updater(TOKEN, use_context=True)
-    dp = updater.dispatcher
-
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, download))
-
-    updater.start_polling()
-    updater.idle()
-
-
-# ==============================
-# START BOTH FLASK + BOT
-# ==============================
 if __name__ == "__main__":
     threading.Thread(target=run_web).start()
     main()
