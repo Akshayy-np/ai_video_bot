@@ -1,135 +1,91 @@
 import os
+import threading
 import yt_dlp
 
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    InputFile,
-)
-from telegram.ext import (
-    ApplicationBuilder,
-    MessageHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    filters,
-)
+from flask import Flask
+from telegram import Update
+from telegram.ext import Updater, MessageHandler, Filters, CallbackContext
 
-# ---------------- BOT TOKEN ----------------
+# ==============================
+# TELEGRAM BOT TOKEN
+# ==============================
 TOKEN = "8599234323:AAGkiqwUbbabe-H2UD13BXOUranrq77GoY0"
-# -------------------------------------------
 
 
-# ========= STEP 1 : USER SENDS LINK =========
-async def receive_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ==============================
+# FLASK KEEP-ALIVE SERVER
+# (Needed for Render FREE)
+# ==============================
+app_web = Flask(__name__)
+
+@app_web.route("/")
+def home():
+    return "Bot is running!"
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    app_web.run(host="0.0.0.0", port=port)
+
+
+# ==============================
+# DOWNLOAD FUNCTION
+# ==============================
+def download(update: Update, context: CallbackContext):
+
     url = update.message.text
-    context.user_data["url"] = url
-
-    keyboard = [
-        [
-            InlineKeyboardButton("1080p", callback_data="1080"),
-            InlineKeyboardButton("720p", callback_data="720"),
-        ],
-        [
-            InlineKeyboardButton("480p", callback_data="480"),
-            InlineKeyboardButton("144p", callback_data="144"),
-        ],
-        [
-            InlineKeyboardButton("🎵 MP3 Audio", callback_data="mp3")
-        ],
-    ]
-
-    await update.message.reply_text(
-        "Choose download quality:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-
-
-# ========= STEP 2 : BUTTON CLICK =========
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    quality = query.data
-    url = context.user_data.get("url")
-
-    await query.message.reply_text("⬇ Downloading...")
+    update.message.reply_text("Downloading... please wait")
 
     filename = "video.%(ext)s"
 
-    # -------- yt-dlp OPTIONS --------
-    # Android client FIXES YouTube cloud blocking
-    base_opts = {
+    # yt-dlp options
+    ydl_opts = {
         "outtmpl": filename,
+        "format": "best",
         "noplaylist": True,
+
+        # Android client (fix YouTube bot verification)
         "extractor_args": {
             "youtube": {
                 "player_client": ["android"]
             }
-        },
-        "quiet": True,
+        }
     }
-
-    # AUDIO OPTION
-    if quality == "mp3":
-        ydl_opts = {
-            **base_opts,
-            "format": "bestaudio",
-            "postprocessors": [
-                {
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "192",
-                }
-            ],
-        }
-
-    # VIDEO QUALITY
-    else:
-        ydl_opts = {
-            **base_opts,
-            "format": f"bestvideo[height<={quality}]+bestaudio/best",
-        }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            file_path = ydl.prepare_filename(info)
+            file_name = ydl.prepare_filename(info)
 
-        # MP3 filename correction
-        if quality == "mp3":
-            file_path = file_path.rsplit(".", 1)[0] + ".mp3"
+        # Send video
+        with open(file_name, "rb") as f:
+            update.message.reply_video(f)
 
-        # Send faster as video when possible
-        with open(file_path, "rb") as f:
-            if file_path.endswith(".mp4"):
-                await query.message.reply_video(
-                    video=InputFile(f),
-                    timeout=120,
-                )
-            else:
-                await query.message.reply_document(
-                    document=InputFile(f),
-                    timeout=120,
-                )
-
-        os.remove(file_path)
+        os.remove(file_name)
 
     except Exception as e:
         print(e)
-        await query.message.reply_text("❌ Download failed.")
+        update.message.reply_text("❌ Download failed.")
 
 
-# ========= BOT START =========
+# ==============================
+# MAIN BOT START
+# ==============================
 def main():
-    app = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_link))
-    app.add_handler(CallbackQueryHandler(button_handler))
+    print("Bot starting...")
 
-    print("Bot running...")
-    app.run_polling()
+    updater = Updater(TOKEN, use_context=True)
+    dp = updater.dispatcher
+
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, download))
+
+    updater.start_polling()
+    updater.idle()
 
 
+# ==============================
+# START BOTH FLASK + BOT
+# ==============================
 if __name__ == "__main__":
+    threading.Thread(target=run_web).start()
     main()
